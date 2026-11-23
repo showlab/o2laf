@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "o2laf"
+version = "0.1.0"
+description = "Latent action learning and action-conditioned world models on Wan 2.2"
+readme = "README.md"
+# MIT for O²LaF; files adapted from NVIDIA AnyFlow keep their Apache-2.0 headers.
+license = "MIT AND Apache-2.0"
+license-files = ["LICENSE", "o2laf/third_party/vjepa2/LICENSE", "o2laf/third_party/pixel_lam/LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.8",
+    "torchvision",
+    "accelerate==1.10.0",
+    "av",
+    "decord2",
+    "diffusers==0.39.0",
+    "einops==0.8.1",
+    "ftfy",
+    "huggingface_hub",
+    "imageio==2.37.0",
+    "imageio-ffmpeg==0.6.0",
+    "numpy<2.0.0",
+    "omegaconf==2.3.0",
+    "opencv-python-headless",
+    "peft==0.17.0",
+    "Pillow",
+    "PyYAML",
+    "safetensors",
+    "sentencepiece",
+    "timm==1.0.30",
+    "transformers==4.49.0",
+    "wandb==0.19.7",
+]
+
+[project.optional-dependencies]
+dev = ["flake8==7.0.0", "isort==5.13.2", "pre-commit", "yapf==0.40.2"]
+
+[project.scripts]
+o2laf-train = "o2laf.train:main"
+o2laf-transfer = "o2laf.inference.cli.transfer:main"
+o2laf-generate = "o2laf.inference.cli.generate:main"
+o2laf-inspect = "o2laf.inference.cli.inspect:main"
+o2laf-export = "o2laf.inference.export:main"
+
+[tool.setuptools.packages.find]
+include = ["o2laf*"]
+
+[tool.setuptools.package-data]
+"o2laf" = ["assets/prompt_embeds/*.safetensors"]
+"o2laf.third_party.vjepa2" = ["LICENSE", "UPSTREAM.md"]
+"o2laf.third_party.pixel_lam" = ["LICENSE", "UPSTREAM.md"]

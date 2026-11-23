@@ -1,0 +1,2 @@
+# Dependencies are declared once, in pyproject.toml; this installs them with the package.
+-e .

@@ -1,0 +1,40 @@
+# Vendored code is not reformatted, so its diff against upstream stays readable.
+# third_party/ is byte-identical to its source apart from imports and headers;
+# data/web_dataset/ (wids) carries local edits -- a shard disk cache and URL
+# scheme checks -- and is still checked by the tests.
+exclude: ^o2laf/(data/web_dataset|third_party)/
+
+repos:
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        args: [--max-line-length=160, --extend-ignore=E203]
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: [--line-length=160]
+
+  - repo: https://github.com/google/yapf
+    rev: v0.40.2
+    hooks:
+      - id: yapf
+        args: ["--style={column_limit: 160}"]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+        # Deliberate binary assets: the packaged prompt embedding (4 MB), the
+        # README example and the evaluation clips (2-3 MB each).
+        exclude: ^(o2laf/assets/prompt_embeds|assets)/
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace

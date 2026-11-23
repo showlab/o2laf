@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+/build/
+/dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Editors and local agents
+.idea/
+.vscode/
+.cursor/
+.claude/
+*.swp
+
+# Machine-local configuration
+.env
+.env.*
+!.env.example
+configs/local*.yaml
+
+# Training and evaluation outputs. Anchored to the repository root: an
+# unanchored `data/` would also drop the `o2laf/data/` package.
+/experiments/
+/results/
+/outputs/
+/artifacts/
+/features/
+/galleries/
+/logs/
+/wandb/
+/tb_logger/
+
+# Large local assets
+/datasets/
+/data/
+/pretrained_models/
+/checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+# The fixed prompt's embedding ships with the package (o2laf/inference/prompts.py).
+!o2laf/assets/prompt_embeds/*.safetensors
+*.mp4
+!assets/evaluation/**/*.mp4
+# The README example pair (o2laf-transfer runs on it as shipped).
+!assets/examples/*.mp4
+*.tar
+*.index
+
+# Platform
+.DS_Store
