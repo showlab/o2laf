@@ -13,7 +13,7 @@
 [![Code](https://img.shields.io/badge/Code-Repo-blue)](https://github.com/showlab/o2laf)
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-Model-orange.svg)](https://huggingface.co/YuxinJ/O2LaF)
 
-<p align="center">
+<p align="left">
   <a href="https://youtu.be/AYWevG1Nhpc">
     <img src="assets/video_thumbnail.jpg" alt="O²LaF video: latent actions inferred from a human video drive a GR-1 robot world model. Click to watch on YouTube." width="70%">
   </a>
@@ -50,7 +50,7 @@ pip install -e .
 
 | Training data | Action encoder | Latent action model | Bidirectional world model |
 |---|---|---|---|
-| MiraData + EgoDexMix | Wan DiT | [🤗 `latent_action_model/`](https://huggingface.co/YuxinJ/O2LaF/tree/main/latent_action_model) | [🤗 `world_model/`](https://huggingface.co/YuxinJ/O2LaF/tree/main/world_model) |
+| MiraData + EgoDexMix | Wan DiT | [🤗 `latent_action_model/`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_dit_mixed/latent_action_model) | [🤗 `world_model/`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_dit_mixed/world_model) |
 | MiraData | Wan DiT | to be released | to be released |
 | EgoDexMix | Wan DiT | to be released | to be released |
 | MiraData | V-JEPA 2 | to be released | to be released |
@@ -59,13 +59,14 @@ pip install -e .
 ## 🎮 Run Demo
 
 Weights download on first use. To use local copies, download them with
-`hf download YuxinJ/O2LaF` and `hf download Wan-AI/Wan2.2-TI2V-5B-Diffusers`
-(the base model), then pass `--model <dir> --base-model <dir>`.
+`hf download YuxinJ/O2LaF --include "o2laf_dit_mixed/*"` and
+`hf download Wan-AI/Wan2.2-TI2V-5B-Diffusers` (the base model), then pass
+`--model <dir>/o2laf_dit_mixed --base-model <dir>`.
 
 #### ▶️ Transfer the actions of a video
 
 ```bash
-o2laf-transfer --model YuxinJ/O2LaF \
+o2laf-transfer --model YuxinJ/O2LaF/o2laf_dit_mixed \
     --source-video assets/examples/gta5.mp4 --first-frame assets/examples/wild_west.jpg \
     --output results/transfer.mp4
 ```
@@ -76,8 +77,8 @@ guidance, default 3), `--control transfer|self|zero|shuffle`.
 #### 🕹️ Drive a frame with an atomic action
 
 ```bash
-o2laf-generate --model YuxinJ/O2LaF --list    # idle, w, s, a, d, camera_up/down/left/right
-o2laf-generate --model YuxinJ/O2LaF --action w \
+o2laf-generate --model YuxinJ/O2LaF/o2laf_dit_mixed --list    # idle, w, s, a, d, camera_up/down/left/right
+o2laf-generate --model YuxinJ/O2LaF/o2laf_dit_mixed --action w \
     --first-frame assets/examples/wild_west.jpg --output results/w.mp4
 ```
 
@@ -89,7 +90,7 @@ from pathlib import Path
 from o2laf import ActionGuidance, LatentActionPipeline
 from o2laf.inference.cli.common import load_first_frame, load_source_video
 
-pipe = LatentActionPipeline.from_pretrained("YuxinJ/O2LaF", mode="bidirectional")
+pipe = LatentActionPipeline.from_pretrained("YuxinJ/O2LaF/o2laf_dit_mixed", mode="bidirectional")
 actions = pipe.encode_source_actions(load_source_video(Path("assets/examples/gta5.mp4"), pipe.fps))
 first_frame = load_first_frame(Path("assets/examples/wild_west.jpg"), pipe.fps)
 video = pipe.generate(actions=actions, first_frame=first_frame, guidance=ActionGuidance(scale=3.0))
