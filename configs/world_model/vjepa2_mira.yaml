@@ -1,0 +1,126 @@
+# World model training on MiraData with a frozen V-JEPA2 action encoder (41-frame windows over
+# 81 frames) and a bidirectional, fully fine-tuned Wan world model.
+
+name: world_model_vjepa2_mira
+
+mode: train
+
+manual_seed: 0
+
+mixed_precision: true
+
+datasets:
+  train:
+    type: VideoTarDataset
+    meta_path: /path/to/miradata_tars/wids-meta.json
+    preprocess_video_cfg:
+      height: 480
+      width: 832
+      fps: 16
+      num_frames: 81
+      random_sample: true
+      skip_head_seconds: 1.0
+    dataloader_cfg:
+      global_batch_size: 128
+      num_workers: 4
+      prefetch_factor: 1
+      persistent_workers: true
+      shuffle_chunk_size: 1000
+      drop_last: true
+
+models:
+  transformer_cfg:
+    model_name: /path/to/Wan2.2-TI2V-5B-Diffusers
+    model_type: WanWorldModel
+    enable_gradient_checkpoint: true
+    param_names_to_optimize: ['']
+    param_names_to_exclude: []
+  idm_cfg:
+    backend: vjepa2
+    model_name: /path/to/vitg-384.pt
+    checkpoint_key: target_encoder
+    architecture: vit_giant_xformers
+    image_size: 256
+    checkpoint_resolution: 384
+    allow_resolution_override: true
+    pretrained_num_frames: 64
+    patch_size: 16
+    tubelet_size: 2
+    prepend_first_frame: true
+    query_init_std: 0.02
+    enable_gradient_checkpoint: false
+    lora_config:
+      lora_rank: 128
+      lora_alpha: 128
+      lora_dropout: 0.0
+      target_module_name: [backbone.blocks.]
+    param_names_to_optimize: [lora_A, lora_B, idm_head]
+    param_names_to_exclude: []
+  fixed_idm_cfg:
+    # A latent-action run's latent_action_state.pt, or a released model directory.
+    state_path: /path/to/latent_action_vjepa2_mira/iter_5000/latent_action_state.pt
+    idm_window_rgb_frames: 41
+    fps: 16
+    fdm_init: pretrained_wan
+  action_cfg:
+    latent_action_dim: 32
+    num_rgb_frames: 81
+    temporal_compression_ratio: 4
+    vjepa_action_compression_ratio: 2
+    num_context_frames: 1
+    fixed_prompt: a video
+    action_dropout_prob: 0.1
+    gamma_init: 2.0
+  text_encoder_cfg: {}
+  vae_cfg: {}
+  scheduler_cfg:
+    shift: 5.0
+    weight_type: gaussian
+
+path:
+  pretrain_network: null
+  experiments_root: experiments/world_model_vjepa2_mira
+
+train:
+  ema_decay: 0.99
+  ema_warmup_step: 100
+  lr_scheduler: constant_with_warmup
+  warmup_iter: 100
+  total_iter: 10000
+  max_grad_norm: 1.0
+  trainer: WorldModelTrainer
+  optimizer:
+    type: AdamW
+    lr: 5.0e-05
+    weight_decay: 0.0
+    betas: [0.9, 0.95]
+
+val:
+  skip_first_eval: false
+  sample_at_end: true
+  sample_freq: 500
+  latent_action_eval:
+    height: 480
+    width: 832
+    fps: 16
+    num_frames: 41
+    num_inference_steps: 10
+    save_video: true
+    seed: 0
+    transfer_mode: matrix
+    use_ema: true
+    clips:
+    - name: mira_low
+      path: assets/evaluation/latent_action_miradata/mira_low.mp4
+    - name: mira_mid
+      path: assets/evaluation/latent_action_miradata/mira_mid.mp4
+    - name: mira_high
+      path: assets/evaluation/latent_action_miradata/mira_high.mp4
+    compute_gate_losses: false
+
+logger:
+  print_freq: 1
+  save_checkpoint_freq: 200
+  save_eval_checkpoint_freq: 1000
+  save_eval_checkpoint_at_end: true
+  use_wandb: false

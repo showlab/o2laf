@@ -1,0 +1,116 @@
+# Latent action learning on MiraData: Wan DiT action encoder (LoRA r128 on the trunk,
+# in-sequence pairwise readout) + causal Wan world model (LoRA r128), 41 frames at 16 fps,
+# global batch 256 (e.g. 16 GPUs x 16 clips).
+
+name: latent_action_wan_dit_mira
+
+mode: train
+
+manual_seed: 0
+
+mixed_precision: true
+
+datasets:
+  train:
+    type: VideoTarDataset
+    meta_path: /path/to/miradata_tars/wids-meta.json
+    preprocess_video_cfg:
+      height: 480
+      width: 832
+      fps: 16
+      num_frames: 41
+      random_sample: true
+      skip_head_seconds: 1.0
+    dataloader_cfg:
+      global_batch_size: 256
+      num_workers: 8
+      shuffle_chunk_size: 1000
+
+models:
+  transformer_cfg:
+    model_name: /path/to/Wan2.2-TI2V-5B-Diffusers
+    model_type: WanWorldModel
+    enable_gradient_checkpoint: true
+    lora_config:
+      lora_rank: 128
+      lora_alpha: 128
+      target_module_name: all-linear
+    param_names_to_optimize: [lora_A, lora_B, action_embedder]
+  idm_cfg:
+    model_name: /path/to/Wan2.2-TI2V-5B-Diffusers
+    backend: wan_dit
+    model_type: WanDiTActionEncoder
+    enable_gradient_checkpoint: true
+    lora_config:
+      lora_rank: 128
+      lora_alpha: 128
+      target_module_name: [blocks.]
+    param_names_to_optimize: [lora_A, lora_B, idm_head]
+    param_names_to_exclude: [action_rope_angle]
+  action_cfg:
+    latent_action_dim: 32
+    num_rgb_frames: 41
+    temporal_compression_ratio: 4
+    num_context_frames: 1
+    action_dropout_prob: 0.1
+    high_sigma_prob: 0.3
+    high_sigma_min: 0.9
+    high_sigma_weight: null
+    beta: 0.0001
+    fixed_prompt: a video
+    gamma_init: 2.0
+    query_init_std: 0.02
+    idm_max_grad_norm: 10
+    kl_active_threshold: 0.01
+    decoder_lora_lr: 5.0e-05
+    action_embedder_lr: 5.0e-05
+    encoder_lora_lr: 5.0e-05
+    readout_lr: 0.0001
+  text_encoder_cfg: {}
+  vae_cfg: {}
+  scheduler_cfg:
+    shift: 5.0
+    weight_type: gaussian
+
+path:
+  pretrain_network: null
+  experiments_root: experiments/latent_action_wan_dit_mira
+
+train:
+  lr_scheduler: constant_with_warmup
+  max_grad_norm: 10
+  warmup_iter: 50
+  total_iter: 10000
+  trainer: LatentActionTrainer
+  optimizer:
+    type: AdamW
+    lr: 5.0e-05
+    weight_decay: 0.0
+    betas: [0.9, 0.95]
+
+val:
+  skip_first_eval: false
+  sample_at_end: true
+  sample_freq: 500
+  latent_action_eval:
+    height: 480
+    width: 832
+    fps: 16
+    num_inference_steps: 10
+    save_video: true
+    seed: 0
+    transfer_mode: matrix
+    save_state_steps: [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
+    clips:
+    - name: mira_low
+      path: assets/evaluation/latent_action_miradata/mira_low.mp4
+    - name: mira_mid
+      path: assets/evaluation/latent_action_miradata/mira_mid.mp4
+    - name: mira_high
+      path: assets/evaluation/latent_action_miradata/mira_high.mp4
+
+logger:
+  print_freq: 1
+  save_checkpoint_freq: 200
+  save_eval_checkpoint_freq: 1000000000
+  use_wandb: false
