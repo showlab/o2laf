@@ -9,9 +9,12 @@
 [Mike Zheng Shou](https://cde.nus.edu.sg/ece/staff/shou-zheng-mike/)
 
 [![arXiv](https://img.shields.io/badge/arXiv-2611.26617-b31b1b.svg)](https://arxiv.org/abs/2611.26617)
+[![HF Paper](https://img.shields.io/badge/🤗%20HuggingFace-Paper-yellow.svg)](https://huggingface.co/papers/2611.26617)
 [![Project Page](https://img.shields.io/badge/Project-Website-green)](https://showlab.github.io/o2laf/)
 [![Code](https://img.shields.io/badge/Code-Repo-blue)](https://github.com/showlab/o2laf)
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-Model-orange.svg)](https://huggingface.co/YuxinJ/O2LaF)
+[![Video](https://img.shields.io/badge/YouTube-Video-red?logo=youtube)](https://youtu.be/AYWevG1Nhpc)
+[![X](https://img.shields.io/badge/X-Post-black?logo=x)](https://x.com/JYuxinn/status/2124783056057999537)
 
 <p align="left">
   <a href="https://youtu.be/AYWevG1Nhpc">
