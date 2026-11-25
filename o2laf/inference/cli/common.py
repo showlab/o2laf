@@ -21,6 +21,8 @@ DEFAULT_CFG_SCALE = 3.0
 def add_model_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--model', required=True, help='Hub model (e.g. YuxinJ/O2LaF/o2laf_dit_mixed) or local model directory.')
     parser.add_argument('--base-model', help='Wan 2.2 TI2V-5B base (repo id or path); defaults to the one the model records.')
+    parser.add_argument('--base-action-encoder',
+                        help='Frozen action-encoder trunk checkpoint, for encoders that need one (e.g. V-JEPA 2 vitg-384.pt).')
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--dtype', choices=('bf16', 'fp32'), default='bf16')
     parser.add_argument('--verify-action-space', action='store_true',
@@ -31,8 +33,8 @@ def load_pipeline(args, mode: str):
     from o2laf.inference.pipeline import LatentActionPipeline
 
     return LatentActionPipeline.from_pretrained(
-        args.model, mode=mode, base_model=args.base_model, device=args.device, dtype=torch_dtype(args.dtype),
-        verify_action_space=args.verify_action_space,
+        args.model, mode=mode, base_model=args.base_model, base_action_encoder=args.base_action_encoder,
+        device=args.device, dtype=torch_dtype(args.dtype), verify_action_space=args.verify_action_space,
     )
 
 

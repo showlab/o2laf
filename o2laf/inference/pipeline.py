@@ -27,7 +27,9 @@ import torch.nn.functional as F
 from diffusers.models import AutoencoderKLWan
 from peft import LoraConfig, get_peft_model
 
-from o2laf.action_encoders.base import unwrap_peft
+from o2laf.action_encoders.base import build_action_encoder_spec, unwrap_peft
+from o2laf.action_encoders.st_transformer import STTransformerActionEncoder
+from o2laf.action_encoders.vjepa2 import VJEPA2ActionEncoder
 from o2laf.action_encoders.wan_dit import WanDiTActionEncoder
 from o2laf.inference import hub
 from o2laf.inference.encoder_windows import plan_encoder_windows, usable_transitions
@@ -120,12 +122,60 @@ def _build_world_model(state: dict[str, torch.Tensor], config: dict[str, Any], b
     return _cast_and_freeze(world_model, device, dtype)
 
 
-def _build_action_encoder(state: dict[str, torch.Tensor], config: dict[str, Any], base_model: str, device, dtype,
-                          **load_kwargs):
-    if config.get('action_encoder') != 'wan_dit':
-        raise NotImplementedError(f'This release runs the Wan DiT action encoder only, not {config.get("action_encoder")!r}.')
+def _build_wan_dit_encoder(config, base_model, dtype, **load_kwargs):
     encoder = WanDiTActionEncoder.from_pretrained(base_model, subfolder='transformer', torch_dtype=dtype, **load_kwargs)
     encoder.setup_readout(latent_dim=int(config['latent_dim']), query_init_std=float(config['query_init_std']))
+    return encoder
+
+
+def _build_vjepa2_encoder(config, base_action_encoder):
+    """The trained parts come from the release; the frozen ViT-g trunk is the user's own copy."""
+    if not base_action_encoder:
+        raise ValueError(
+            'This model needs the V-JEPA 2 ViT-g checkpoint it was trained on. Pass base_action_encoder=<path to '
+            f'{config.get("base_action_encoder_name", "vitg-384.pt")}>.'
+        )
+    return VJEPA2ActionEncoder(
+        checkpoint=str(base_action_encoder),
+        checkpoint_key=str(config.get('checkpoint_key', 'target_encoder')),
+        architecture=str(config.get('architecture', 'vit_giant_xformers')),
+        image_size=int(config['image_size']),
+        pretrained_num_frames=int(config['pretrained_num_frames']),
+        patch_size=int(config['patch_size']),
+        tubelet_size=int(config['tubelet_size']),
+        latent_dim=int(config['latent_dim']),
+        query_init_std=float(config['query_init_std']),
+        prepend_first_frame=bool(config['prepend_first_frame']),
+        checkpoint_resolution=int(config.get('checkpoint_resolution', 384)),
+        allow_resolution_override=bool(config.get('allow_resolution_override', False)),
+        load_checkpoint=True,
+    )
+
+
+def _build_st_transformer_encoder(config):
+    """Trained from scratch, so the release holds every weight it needs."""
+    return STTransformerActionEncoder(
+        latent_dim=int(config['latent_dim']),
+        model_dim=int(config['model_dim']),
+        enc_blocks=int(config['enc_blocks']),
+        num_heads=int(config['num_heads']),
+        patch_size=int(config['patch_size']),
+        height=int(config['height']),
+        width=int(config['width']),
+    )
+
+
+def _build_action_encoder(state: dict[str, torch.Tensor], config: dict[str, Any], base_model: str, device, dtype,
+                          base_action_encoder=None, **load_kwargs):
+    name = config.get('action_encoder')
+    if name == 'wan_dit':
+        encoder = _build_wan_dit_encoder(config, base_model, dtype, **load_kwargs)
+    elif name == 'vjepa2':
+        encoder = _build_vjepa2_encoder(config, base_action_encoder)
+    elif name == 'st_transformer':
+        encoder = _build_st_transformer_encoder(config)
+    else:
+        raise NotImplementedError(f'Unknown action encoder {name!r}; expected wan_dit, vjepa2 or st_transformer.')
     if config.get('lora_config') is not None:
         encoder = _attach_lora(encoder, config['lora_config'], 'action encoder')
         adapted_head = [
@@ -174,6 +224,10 @@ class LatentActionPipeline:
     # The clip length the action encoder was trained on; longer source videos
     # are read in windows of this length (see o2laf.inference.encoder_windows).
     encoder_window_rgb_frames: int
+    # Which encoder this model carries, and whether it reads the clip's pixels
+    # or the VAE latents of those pixels.
+    action_encoder_name: str
+    encoder_reads_pixels: bool
     action_dim: int
     action_compression_ratio: int
     height: int
@@ -188,6 +242,7 @@ class LatentActionPipeline:
         *,
         mode: str = 'bidirectional',
         base_model: str | Path | None = None,
+        base_action_encoder: str | Path | None = None,
         device: str | torch.device = 'cuda',
         dtype: torch.dtype = torch.bfloat16,
         revision: str | None = None,
@@ -202,6 +257,8 @@ class LatentActionPipeline:
             mode: ``'bidirectional'`` (the model the paper evaluates) or ``'causal'``.
             base_model: the Wan 2.2 TI2V-5B base, as a Hub id or local path;
                 defaults to the one the model records.
+            base_action_encoder: the frozen trunk an action encoder was trained
+                on, for the encoders that have one (V-JEPA 2's ViT-g checkpoint).
             verify_action_space: recompute the action encoder's content hash and
                 check it against the recorded action space (a few seconds).
         """
@@ -240,7 +297,10 @@ class LatentActionPipeline:
         world_model = _build_world_model(
             hub.load_part_state(root, world_model_at), world_model_config, base_model_path, device, dtype, **base_kwargs
         )
-        action_encoder = _build_action_encoder(encoder_state, encoder_config, base_model_path, device, dtype, **base_kwargs)
+        action_encoder = _build_action_encoder(
+            encoder_state, encoder_config, base_model_path, device, dtype,
+            base_action_encoder=base_action_encoder, **base_kwargs,
+        )
         del encoder_state
         scheduler = FlowMatchEulerScheduler.from_pretrained(
             base_model_path, subfolder='scheduler', **mode_config['scheduler_cfg'], **base_kwargs
@@ -263,6 +323,8 @@ class LatentActionPipeline:
             num_latent_frames=int(world_model_config['num_latent_frames']),
             num_context_frames=int(mode_config['num_context_frames']),
             encoder_window_rgb_frames=int(encoder_config['num_rgb_frames']),
+            action_encoder_name=str(encoder_config['action_encoder']),
+            encoder_reads_pixels=bool(build_action_encoder_spec(encoder_config['action_encoder']).reads_pixels),
             action_dim=int(index['action_dim']),
             action_compression_ratio=int(index['codes_per_transition']),
             height=int(mode_config['height']),
@@ -323,6 +385,10 @@ class LatentActionPipeline:
     def num_rgb_frames_for(self, num_latent_frames: int) -> int:
         return 1 + (num_latent_frames - 1) * self.temporal_compression_ratio
 
+    @property
+    def encoder_spec(self):
+        return build_action_encoder_spec(self.action_encoder_name)
+
     @torch.no_grad()
     def encode_source_actions(self, frames) -> torch.Tensor:
         """Actions ``[1, K, D]`` of a source video of any length, as uint8 ``[T,H,W,3]`` frames at ``fps``.
@@ -344,7 +410,13 @@ class LatentActionPipeline:
         pieces = []
         for window in windows:
             clip = frames[window.start_rgb_frame:window.start_rgb_frame + window.num_rgb_frames]
-            actions = self._encode_actions(self.encode_latents(self.preprocess_frames(clip)))
+            pixels = self.preprocess_frames(clip)
+            # Each encoder's preprocessing is its own: the Wan VAE for wan_dit,
+            # a square crop for vjepa2, a resize for st_transformer.
+            actions = (
+                self._encode_actions(pixels=pixels) if self.encoder_reads_pixels
+                else self._encode_actions(latents=self.encode_latents(pixels))
+            )
             pieces.append(actions[:, :window.kept_transitions * codes])
         actions = torch.cat(pieces, dim=1)
         expected = usable_transitions(num_frames, self.temporal_compression_ratio) * codes
@@ -357,18 +429,31 @@ class LatentActionPipeline:
         """Posterior-mean actions ``[B, F-1, D]`` from the latents of one clip of this mode's length, in one pass.
 
         :meth:`encode_source_actions` is what the commands use; this single
-        pass is how training reads its clips.
+        pass is how training reads its clips. Only the encoders that read VAE
+        latents have this path.
         """
+        if self.encoder_reads_pixels:
+            raise TypeError(
+                f'The {self.action_encoder_name} action encoder reads pixels, not latents; '
+                'use encode_source_actions().'
+            )
         if latents.shape[2] != self.num_latent_frames:
             raise ValueError(f'Expected {self.num_latent_frames} latent frames, got {latents.shape[2]}.')
-        return self._encode_actions(latents)
+        return self._encode_actions(latents=latents)
 
-    def _encode_actions(self, latents: torch.Tensor) -> torch.Tensor:
-        timestep = torch.zeros(latents.shape[:1] + latents.shape[2:3], device=latents.device, dtype=torch.float32)
+    def _encode_actions(self, *, latents: torch.Tensor | None = None, pixels: torch.Tensor | None = None) -> torch.Tensor:
+        """Posterior-mean actions, handing the encoder whichever form of the clip it reads."""
+        if pixels is not None:
+            # preprocess_frames leaves the clip on the CPU; encode_latents moves
+            # it for the encoders that read latents, so the pixel path must too.
+            pixels = pixels.to(device=self.device, dtype=self.dtype)
+        reference = pixels if latents is None else latents
         prompt = self.prompt_embeddings
-        if prompt.shape[0] != latents.shape[0]:
-            prompt = prompt.expand(latents.shape[0], -1, -1)
-        outputs = self.action_encoder(hidden_states=latents, timestep=timestep, encoder_hidden_states=prompt, r_timestep=timestep)
+        if prompt.shape[0] != reference.shape[0]:
+            prompt = prompt.expand(reference.shape[0], -1, -1)
+        outputs = self.encoder_spec.encode(
+            self.action_encoder, latents=latents, pixel_values=pixels, prompt_embeds=prompt,
+        )
         return outputs['action_mu']
 
     def num_latent_frames_for_actions(self, actions: torch.Tensor) -> int:
@@ -506,7 +591,8 @@ class LatentActionPipeline:
         resized to the model's resolution. See :meth:`generate_latents` for the
         other arguments.
         """
-        first_frame = torch.as_tensor(first_frame)
+        # A decoded frame is often a read-only array; preprocess_frames copies it.
+        first_frame = torch.as_tensor(np.array(first_frame)) if isinstance(first_frame, np.ndarray) else torch.as_tensor(first_frame)
         if first_frame.ndim == 3:
             first_frame = first_frame.unsqueeze(0)
         first_frame_latents = self.encode_latents(self.preprocess_frames(first_frame))

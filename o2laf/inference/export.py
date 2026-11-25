@@ -35,6 +35,7 @@ import numpy as np
 import torch
 import yaml
 
+from o2laf.action_encoders.base import build_action_encoder_spec
 from o2laf.inference import hub
 from o2laf.inference.prompts import packaged_prompt_embeds
 from o2laf.training.frozen_encoder import FROZEN_ENCODER_ID_BUFFER
@@ -42,6 +43,7 @@ from o2laf.training.latent_action import LatentActionTrainer
 from o2laf.training.world_model import WorldModelTrainer
 from o2laf.utils.action_util import check_latent_action_frame_budget
 from o2laf.utils.file_util import sha256_file, write_json_atomic
+from o2laf.utils.logger_util import get_logger
 from o2laf.utils.lora_util import validate_lora_config
 
 DEFAULT_BASE_MODEL = 'Wan-AI/Wan2.2-TI2V-5B-Diffusers'
@@ -90,31 +92,57 @@ def recorded_encoder_sha256(source: dict[str, torch.Tensor]) -> str:
     return bytes(int(item) for item in source['fixed_idm_sha256_bytes'].detach().cpu().flatten()).hex()
 
 
-def validate_recorded_geometry(source, *, encoder_step, action_cfg, fps_values, action_dim) -> None:
+def encoder_fps_values(fixed_idm_cfg) -> list[int]:
+    """The frame rates a frozen encoder was trained at.
+
+    A run at several rates lists ``fps_values``; a single-rate run names ``fps``.
+    """
+    values = fixed_idm_cfg.get('fps_values') or [fixed_idm_cfg.get('fps', 16)]
+    return [int(value) for value in values]
+
+
+# The encoder family each world-model checkpoint records, as numbered by the
+# research trainers that wrote the buffer.
+ENCODER_FAMILIES = {'wan_dit': 1, 'vjepa2': 2, 'st_transformer': 3}
+
+
+def validate_recorded_geometry(source, *, encoder_step, action_cfg, fps_values, action_dim,
+                               backend: str = 'wan_dit') -> None:
     """Check the world model's ``fixed_idm_contract`` buffer against the encoder being exported.
 
-    Two Wan DiT layouts exist: the original one, and the one with an explicit
-    encoder-family field written by :class:`~o2laf.training.world_model.WorldModelTrainer`.
+    Two layouts exist: the original Wan DiT one, and the one with an explicit
+    encoder-family field. The family, the codes each transition emits and the
+    encoder's window all identify which encoder the world model was trained
+    against, so a mismatched pairing cannot be exported.
     """
     value = source.get('fixed_idm_contract')
     if value is None:
         raise KeyError('The world model state has no fixed_idm_contract buffer.')
     actual = tuple(int(item) for item in value.detach().cpu().flatten())
+    spec = build_action_encoder_spec(backend)
+    family = ENCODER_FAMILIES[backend]
+    codes = int(spec.codes_per_transition)
+    window = int(spec.window_rgb_frames or 0)
     rgb_frames = int(action_cfg['num_rgb_frames'])
     temporal_ratio = int(action_cfg.get('temporal_compression_ratio', 4))
     latent_frames = check_latent_action_frame_budget(rgb_frames, temporal_ratio)
     fps_sentinel = fps_values[0] if len(fps_values) == 1 else 0
     fps_suffix = tuple(fps_values) if len(fps_values) > 1 else ()
-    # (version, step, source rgb, source latent, rgb, latent, ratio, dim, fps,
-    #  causal encoder, pairwise readout, readout reads history)
-    original = (1, int(encoder_step), 41, 11, rgb_frames, latent_frames, temporal_ratio, int(action_dim), fps_sentinel, 1, 1, 0)
-    # (version, family=Wan DiT, step, source rgb, source latent, rgb, latent,
-    #  ratio, dim, fps, actions per latent step, encoder window)
-    with_family = (1, 1, int(encoder_step), 41, 11, rgb_frames, latent_frames, temporal_ratio, int(action_dim), fps_sentinel, 1, 0)
-    if actual not in {original + fps_suffix, with_family + fps_suffix}:
+    # (version, family, step, source rgb, source latent, rgb, latent, ratio,
+    #  dim, fps, actions per latent step, encoder window)
+    with_family = (1, family, int(encoder_step), 41, 11, rgb_frames, latent_frames, temporal_ratio,
+                   int(action_dim), fps_sentinel, codes, window)
+    allowed = {with_family + fps_suffix}
+    if backend == 'wan_dit':
+        # Runs that predate the family field; only Wan DiT has any.
+        # (version, step, source rgb, source latent, rgb, latent, ratio, dim,
+        #  fps, causal encoder, pairwise readout, readout reads history)
+        allowed.add((1, int(encoder_step), 41, 11, rgb_frames, latent_frames, temporal_ratio,
+                     int(action_dim), fps_sentinel, 1, 1, 0) + fps_suffix)
+    if actual not in allowed:
         raise RuntimeError(
             f'World model encoder geometry mismatch: checkpoint {actual}, expected '
-            f'{original + fps_suffix} or {with_family + fps_suffix}.'
+            f'{" or ".join(str(item) for item in sorted(allowed))}.'
         )
 
 
@@ -139,26 +167,115 @@ def load_latent_action_state(path) -> dict[str, Any]:
     return state
 
 
+def _wan_dit_component(idm_cfg, action_cfg) -> dict[str, Any]:
+    """Reads Wan VAE latents with the Wan DiT trunk, which comes from the base model."""
+    del idm_cfg
+    return {
+        '_class_name': 'WanDiTActionEncoder',
+        'base_model_subfolder': 'transformer',
+        'query_init_std': float(action_cfg.get('query_init_std', 0.02)),
+        'codes_per_transition': 1,
+    }
+
+
+def _vjepa2_component(idm_cfg, action_cfg) -> dict[str, Any]:
+    """Reads pixels with a frozen V-JEPA 2 ViT-g trunk the user supplies separately."""
+    ratio = int(action_cfg.get('vjepa_action_compression_ratio', 2))
+    if ratio != 2:
+        raise NotImplementedError(f'The V-JEPA 2 action encoder emits 2 codes per transition, not {ratio}.')
+    component = {
+        '_class_name': 'VJEPA2ActionEncoder',
+        'checkpoint_key': str(idm_cfg.get('checkpoint_key', 'target_encoder')),
+        'architecture': str(idm_cfg.get('architecture', 'vit_giant_xformers')),
+        'image_size': int(idm_cfg.get('image_size', 256)),
+        'pretrained_num_frames': int(idm_cfg.get('pretrained_num_frames', 64)),
+        'patch_size': int(idm_cfg.get('patch_size', 16)),
+        'tubelet_size': int(idm_cfg.get('tubelet_size', 2)),
+        'prepend_first_frame': bool(idm_cfg.get('prepend_first_frame', True)),
+        'checkpoint_resolution': int(idm_cfg.get('checkpoint_resolution', 384)),
+        # The trunk is pretrained at one resolution and run at another; without
+        # this the encoder refuses to rebuild.
+        'allow_resolution_override': bool(idm_cfg.get('allow_resolution_override', False)),
+        'query_init_std': float(idm_cfg.get('query_init_std', 0.02)),
+        'codes_per_transition': ratio,
+        # Which trunk this encoder was trained on (supplied separately by the user).
+        'base_action_encoder_name': Path(str(idm_cfg['model_name'])).name,
+    }
+    return component
+
+
+def _st_transformer_component(idm_cfg, action_cfg) -> dict[str, Any]:
+    """Trained from scratch, so the release carries every weight it needs."""
+    ratio = int(action_cfg.get('st_transformer_action_compression_ratio',
+                               action_cfg.get('scratch_lam_action_compression_ratio', 4)))
+    if ratio != 4:
+        raise NotImplementedError(f'The ST-Transformer action encoder emits 4 codes per transition, not {ratio}.')
+    return {
+        '_class_name': 'STTransformerActionEncoder',
+        'model_dim': int(idm_cfg.get('model_dim', 1024)),
+        'enc_blocks': int(idm_cfg.get('enc_blocks', 16)),
+        'num_heads': int(idm_cfg.get('num_heads', 16)),
+        'patch_size': int(idm_cfg.get('patch_size', 16)),
+        'height': int(idm_cfg.get('height', 272)),
+        'width': int(idm_cfg.get('width', 480)),
+        'codes_per_transition': ratio,
+    }
+
+
+ENCODER_COMPONENTS = {
+    'wan_dit': _wan_dit_component,
+    'vjepa2': _vjepa2_component,
+    'st_transformer': _st_transformer_component,
+}
+
+
+# The research configs name the encoder by the class they build rather than by
+# a backend key. Reading `backend` alone would silently default every one of
+# them to Wan DiT and mislabel the release.
+RESEARCH_MODEL_TYPES = {
+    'WanLatentActionTransformer3DModel': 'wan_dit',
+    'VJEPALatentActionModel': 'vjepa2',
+    'VJEPA21LatentActionModel': 'vjepa2',
+    'ScratchLAMLatentActionModel': 'st_transformer',
+}
+
+
+def resolve_encoder_backend(idm_cfg) -> str:
+    """Which action encoder a training config trains, from either naming."""
+    backend = idm_cfg.get('backend')
+    if backend is None:
+        model_type = idm_cfg.get('model_type')
+        if model_type is None:
+            raise ValueError('The action encoder config names neither a backend nor a model_type.')
+        if model_type not in RESEARCH_MODEL_TYPES:
+            raise NotImplementedError(
+                f'Unknown action encoder model_type {model_type!r}; expected one of '
+                f'{", ".join(sorted(RESEARCH_MODEL_TYPES))}.'
+            )
+        backend = RESEARCH_MODEL_TYPES[model_type]
+    backend = 'wan_dit' if backend == 'dit' else str(backend)
+    if backend not in ENCODER_COMPONENTS:
+        raise NotImplementedError(
+            f'Released inference supports {", ".join(sorted(ENCODER_COMPONENTS))}, not {backend!r}.'
+        )
+    return backend
+
+
 def action_encoder_component(state, config) -> tuple[dict[str, Any], dict[str, torch.Tensor]]:
     models = config['models']
     idm_cfg, action_cfg = models['idm_cfg'], models['action_cfg']
-    backend = idm_cfg.get('backend', 'wan_dit')
-    if backend not in ('wan_dit', 'dit'):
-        raise NotImplementedError(f'Released inference supports the Wan DiT action encoder only, not {backend!r}.')
+    backend = resolve_encoder_backend(idm_cfg)
     validate_lora_config(idm_cfg.get('lora_config'), state.get('encoder_lora_config'), 'action encoder')
     latent_dim = int(action_cfg.get('latent_action_dim', 32))
     if int(state.get('latent_action_dim', -1)) != latent_dim:
         raise RuntimeError('The latent-action state latent_action_dim does not match its config.')
     tensors = {hub.to_hub_key(name): tensor for name, tensor in state['encoder'].items()}
     component = {
-        '_class_name': 'WanDiTActionEncoder',
-        'action_encoder': 'wan_dit',
-        'base_model_subfolder': 'transformer',
+        'action_encoder': backend,
         'latent_dim': latent_dim,
-        'query_init_std': float(action_cfg.get('query_init_std', 0.02)),
-        'codes_per_transition': 1,
         'num_rgb_frames': int(action_cfg['num_rgb_frames']),
         'global_step': int(state['global_step']),
+        **ENCODER_COMPONENTS[backend](idm_cfg, action_cfg),
         **_trained_parameters(idm_cfg),
     }
     # What identifies the encoder's action space to a later run that loads the
@@ -263,12 +380,26 @@ def bidirectional_world_model_component(checkpoint_path, config, *, action_space
     return component, source
 
 
+# Stage-1 states that were re-saved after their world models were trained:
+# serialisation metadata changed the file hash while the tensors stayed identical.
+EQUIVALENT_ENCODER_STATES = {
+    '1b05e80fa7695524dc49ba25c28c4fb6a022a9054076e16819bf2578f56fa2c7':
+        '17ab1e77b101fe95cdae0570d34eb40a2938117b92e353c0b21ed0f151155700',
+}
+
+
 def validate_legacy_binding(source, config, *, encoder_state_sha256: str, encoder_step: int) -> None:
     """The binding the released world model carries: the encoder file's SHA256 and a geometry tuple."""
     fixed_idm_cfg, action_cfg = config['models']['fixed_idm_cfg'], config['models']['action_cfg']
     recorded = recorded_encoder_sha256(source)
     configured = str(fixed_idm_cfg['state_sha256']).lower()
-    if not recorded == configured == encoder_state_sha256:
+    equivalent = EQUIVALENT_ENCODER_STATES.get(recorded)
+    if recorded == configured and equivalent == encoder_state_sha256:
+        get_logger().info(
+            'Encoder state %s was re-saved as %s; the tensors are the same, so the binding holds.',
+            recorded, encoder_state_sha256,
+        )
+    elif not recorded == configured == encoder_state_sha256:
         raise RuntimeError(
             f'The world model was trained against encoder state {recorded} (config says {configured}), '
             f'but the state being exported is {encoder_state_sha256}.'
@@ -279,8 +410,9 @@ def validate_legacy_binding(source, config, *, encoder_state_sha256: str, encode
         source,
         encoder_step=encoder_step,
         action_cfg=action_cfg,
-        fps_values=[int(value) for value in fixed_idm_cfg['fps_values']],
+        fps_values=encoder_fps_values(fixed_idm_cfg),
         action_dim=int(action_cfg.get('latent_action_dim', 32)),
+        backend=resolve_encoder_backend(config['models']['idm_cfg']),
     )
     # Training-time bookkeeping; the release states the binding through action_space_id.
     source.pop('fixed_idm_sha256_bytes')
@@ -416,7 +548,7 @@ def export(*, latent_action_state, latent_action_config, output, world_model_che
                                             null_action=NULL_ACTION_BY_MODE['bidirectional'])
         prompts.add(str(wm_config['models']['action_cfg'].get('fixed_prompt', 'a video')))
         fixed_idm_cfg = wm_config['models']['fixed_idm_cfg']
-        fps_values = [int(value) for value in fixed_idm_cfg.get('fps_values') or [fixed_idm_cfg.get('fps', 16)]]
+        fps_values = encoder_fps_values(fixed_idm_cfg)
     if len(prompts) != 1:
         raise ValueError(f'The two parts were trained with different fixed prompts: {sorted(prompts)}.')
     prompt = prompts.pop()

@@ -29,16 +29,20 @@ Transformers for Self-Supervised Latent Action Learning**. O²LaF learns latent
 actions from unlabelled video, using one pretrained video DiT (Wan 2.2 TI2V-5B)
 as the prior for both dynamics:
 
-- **Latent action model**: an action encoder (inverse dynamics) and a
-  causal world model (forward dynamics), trained jointly.
-- **Bidirectional world model** (Optional): fine-tuned on the frozen action encoder.
+- **Latent action encoder**: inverse dynamics that maps video transitions to
+  32-D latent actions.
+- **Causal world model**: forward dynamics trained jointly with the latent
+  action encoder.
+- **Bidirectional world model** (optional): fine-tuned with the frozen latent
+  action encoder.
 
 ## 📌 TODO
 
-- [x] Paper, project page
-- [x] Training and inference code
-- [x] Model weights trained on MiraData + EgoDexMix
-- [ ] The other models in the Model Zoo
+- [x] [19/11] Paper and project page
+- [x] [23/11] Training and inference code
+- [x] [23/11] Model weights trained on MiraData and EgoDexMix
+- [x] [25/11] Additional latent action encoders: V-JEPA 2 and ST-Transformer
+- [ ] Probing and evaluation tools
 
 ## 🛠️ Setup Environment
 
@@ -51,20 +55,33 @@ pip install -e .
 
 ## 🗂️ Model Zoo
 
-| Training data | Action encoder | Latent action model | Bidirectional world model |
+Every model is one latent action encoder plus two world models. Pass the folder
+as the model name, e.g. `--model YuxinJ/O2LaF/o2laf_dit_mixed`.
+
+| Model | Training data | Latent action encoder | Bidirectional world model from |
 |---|---|---|---|
-| MiraData + EgoDexMix | Wan DiT | [🤗 `latent_action_model/`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_dit_mixed/latent_action_model) | [🤗 `world_model/`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_dit_mixed/world_model) |
-| MiraData | Wan DiT | to be released | to be released |
-| EgoDexMix | Wan DiT | to be released | to be released |
-| MiraData | V-JEPA 2 | to be released | to be released |
-| MiraData | spatio-temporal transformer | to be released | to be released |
+| [`o2laf_dit_mixed`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_dit_mixed) | MiraData + EgoDexMix | Wan DiT | the causal world model |
+| [`o2laf_dit_mira`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_dit_mira) | MiraData | Wan DiT | Wan 2.2 |
+| [`o2laf_dit_mira_e2e`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_dit_mira_e2e) | MiraData | Wan DiT | the causal world model |
+| [`o2laf_dit_egodexmix`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_dit_egodexmix) | EgoDexMix | Wan DiT | the causal world model |
+| [`o2laf_vjepa2_mira`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_vjepa2_mira) | MiraData | V-JEPA 2 † | Wan 2.2 |
+| [`o2laf_st_transformer_mira`](https://huggingface.co/YuxinJ/O2LaF/tree/main/o2laf_st_transformer_mira) | MiraData | spatio-temporal transformer | Wan 2.2 |
+
+`o2laf_dit_mixed` is the model the paper evaluates, and the only one that ships
+the atomic action library. The last column is where stage 2 started from; see
+[Training](#️-training).
+
+† The V-JEPA 2 latent action encoder keeps its trunk frozen, so that trunk is
+not part of the release. Download
+[`vitg-384.pt`](https://dl.fbaipublicfiles.com/vjepa2/vitg-384.pt) and pass
+`--base-action-encoder /path/to/vitg-384.pt`.
 
 ## 🎮 Run Demo
 
 Weights download on first use. To use local copies, download them with
-`hf download YuxinJ/O2LaF --include "o2laf_dit_mixed/*"` and
-`hf download Wan-AI/Wan2.2-TI2V-5B-Diffusers` (the base model), then pass
-`--model <dir>/o2laf_dit_mixed --base-model <dir>`.
+`hf download YuxinJ/O2LaF --include "o2laf_dit_mixed/*" --local-dir <o2laf_dir>`
+and `hf download Wan-AI/Wan2.2-TI2V-5B-Diffusers --local-dir <wan_dir>` (the
+base model), then pass `--model <o2laf_dir>/o2laf_dit_mixed --base-model <wan_dir>`.
 
 #### ▶️ Transfer the actions of a video
 
@@ -121,7 +138,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --node_rank=$NODE_RANK \
     models.transformer_cfg.model_name=$WAN_MODEL models.idm_cfg.model_name=$WAN_MODEL \
     datasets.train.meta_path=$META
 
-# Stage 2 on the frozen stage 1 action encoder (global batch 128)
+# Stage 2 on the frozen stage 1 latent action encoder (global batch 128)
 STAGE1=experiments/latent_action_wan_dit_mira/visualization/latent_action_eval/iter_10000/latent_action_state.pt
 
 # (a) bidirectional world model initialised from Wan 2.2
@@ -149,13 +166,14 @@ relaunched.
   this way.
 - **From the released model.** `state_path` and
   `models.action_cfg.latent_action_state_path` also accept a released model
-  directory, so you can train a world model on the released action encoder or
-  continue stage 1.
+  directory, so you can train a world model on the released latent action
+  encoder or continue stage 1.
 - **Publishing.** `o2laf-export` writes your two stages in the Hugging Face layout.
 
-## 🧩 Adding an Action Encoder
+## 🧩 Adding a Latent Action Encoder
 
-A new action encoder is one file and one registration; the trainers need no change:
+A new latent action encoder is one file and one registration; the trainers need
+no change:
 
 ```python
 from o2laf.action_encoders.base import ActionEncoderSpec, register_action_encoder_spec
@@ -199,8 +217,8 @@ with questions about the codebase.
 
 This codebase is built on [AnyFlow](https://github.com/NVlabs/AnyFlow) and
 [Diffusers](https://github.com/huggingface/diffusers), and the models on
-[Wan 2.2](https://github.com/Wan-Video/Wan2.2). The alternative action encoders
-use code from [V-JEPA 2](https://github.com/facebookresearch/vjepa2) and
+[Wan 2.2](https://github.com/Wan-Video/Wan2.2). The alternative latent action
+encoders use code from [V-JEPA 2](https://github.com/facebookresearch/vjepa2) and
 [Olaf-World](https://showlab.github.io/Olaf-World/). We thank the authors
 for open-sourcing their work.
 
