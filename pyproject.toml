@@ -43,6 +43,7 @@ dev = ["flake8==7.0.0", "isort==5.13.2", "pre-commit", "yapf==0.40.2"]
 o2laf-train = "o2laf.train:main"
 o2laf-transfer = "o2laf.inference.cli.transfer:main"
 o2laf-generate = "o2laf.inference.cli.generate:main"
+o2laf-attention = "o2laf.inference.cli.attention:main"
 o2laf-inspect = "o2laf.inference.cli.inspect:main"
 o2laf-export = "o2laf.inference.export:main"
 

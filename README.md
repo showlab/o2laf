@@ -102,6 +102,15 @@ o2laf-generate --model YuxinJ/O2LaF/o2laf_dit_mixed --action w \
     --first-frame assets/examples/wild_west.jpg --output results/w.mp4
 ```
 
+#### 🔍 Visualize latent action attention
+
+```bash
+o2laf-attention --model YuxinJ/O2LaF/o2laf_dit_mixed \
+    --video assets/examples/gr1.mp4 --output results/gr1_b22_h02.mp4 \
+    --block 22 --head 2
+```
+
+
 #### 🐍 Python API
 
 ```python

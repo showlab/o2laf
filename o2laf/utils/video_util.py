@@ -259,6 +259,10 @@ class VideoLoader:
                     f'{pyav_error}'
                 ) from pyav_error
 
+    def get_frames(self, frame_idxs):
+        """Decode the requested 0-based frame indices as uint8 ``[N,H,W,3]``."""
+        return self._get_batch(frame_idxs)
+
     def get_clip(self, num_frames: int, target_fps=None, random_sample=False, source_frame_start=0):
         """Decode ``num_frames`` frames at ``target_fps`` starting at or after ``source_frame_start``.
 

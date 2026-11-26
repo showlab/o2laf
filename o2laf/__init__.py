@@ -2,7 +2,7 @@
 
 __version__ = '0.1.0'
 
-__all__ = ['ActionGuidance', 'LatentActionPipeline']
+__all__ = ['ActionAttentionExtractor', 'ActionGuidance', 'AttentionRenderConfig', 'LatentActionPipeline']
 
 
 def __getattr__(name):
@@ -15,4 +15,8 @@ def __getattr__(name):
         from o2laf.inference.sampling import ActionGuidance
 
         return ActionGuidance
+    if name in ('ActionAttentionExtractor', 'AttentionRenderConfig'):
+        from o2laf.inference import attention
+
+        return getattr(attention, name)
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

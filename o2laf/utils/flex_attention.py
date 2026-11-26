@@ -146,6 +146,11 @@ class WanFlexAttnProcessor:
     def __init__(self):
         self.block_mask = None
 
+    def _attend(self, query, key, value, attention_mask):
+        if attention_mask is None:
+            return F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False)
+        return flex_attention(query, key, value, block_mask=attention_mask)
+
     def __call__(
         self,
         attn,
@@ -175,10 +180,7 @@ class WanFlexAttnProcessor:
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
 
-        if attention_mask is None:
-            hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False)
-        else:
-            hidden_states = flex_attention(query, key, value, block_mask=attention_mask)
+        hidden_states = self._attend(query, key, value, attention_mask)
 
         hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
         hidden_states = hidden_states.type_as(query)
