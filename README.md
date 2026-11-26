@@ -37,12 +37,13 @@ as the prior for both dynamics:
   action encoder.
 
 ## 📌 Updates
-
 - [x] [26/11] IDM as a motion annotator (CameraBench & custom datasets)
 - [x] [25/11] Additional latent action encoders: V-JEPA 2 and ST-Transformer
 - [x] [23/11] Model weights trained on MiraData and EgoDexMix
 - [x] [23/11] Training and inference code
 - [x] [19/11] Paper and project page
+
+<!-- -->
 
 - [ ] Probing and evaluation tools
 
@@ -142,14 +143,14 @@ metadata file; no captions are needed:
 ```
 
 ```bash
-# Stage 1 (global batch 256; here 2 nodes x 8 GPUs)
+# Stage 1 
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank=$NODE_RANK \
     --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT -m o2laf.train \
     config_path=configs/latent_action/wan_dit_mira.yaml \
     models.transformer_cfg.model_name=$WAN_MODEL models.idm_cfg.model_name=$WAN_MODEL \
     datasets.train.meta_path=$META
 
-# Stage 2 on the frozen stage 1 latent action encoder (global batch 128)
+# Stage 2 on the frozen stage 1 latent action encoder 
 STAGE1=experiments/latent_action_wan_dit_mira/visualization/latent_action_eval/iter_10000/latent_action_state.pt
 
 # (a) bidirectional world model initialised from Wan 2.2
