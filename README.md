@@ -36,12 +36,14 @@ as the prior for both dynamics:
 - **Bidirectional world model** (optional): fine-tuned with the frozen latent
   action encoder.
 
-## 📌 TODO
+## 📌 Updates
 
-- [x] [19/11] Paper and project page
-- [x] [23/11] Training and inference code
-- [x] [23/11] Model weights trained on MiraData and EgoDexMix
+- [x] [26/11] IDM as a motion annotator (CameraBench & custom datasets)
 - [x] [25/11] Additional latent action encoders: V-JEPA 2 and ST-Transformer
+- [x] [23/11] Model weights trained on MiraData and EgoDexMix
+- [x] [23/11] Training and inference code
+- [x] [19/11] Paper and project page
+
 - [ ] Probing and evaluation tools
 
 ## 🛠️ Setup Environment
@@ -212,6 +214,16 @@ class MyEncoderSpec(ActionEncoderSpec):
 ```
 
 Select it with `models.idm_cfg.backend: my_encoder`.
+
+## 🎬 IDM as a Motion Annotator
+
+[`motion_annotation/`](motion_annotation/README.md) repurposes O²LaF's
+latent action encoder (IDM) for supervised motion annotation on **CameraBench**
+and custom multi-label video datasets, achieving state-of-the-art performance
+on [CameraBench](https://linzhiqiu.github.io/papers/camerabench/) (89.9%).
+
+> Also check out the great 0.4B camera-motion IDM from
+> [Hy-Nomas](https://github.com/Tencent-Hunyuan/Hy-Nomas/tree/operator/IDM)🎉!
 
 ## 📜 License
 
